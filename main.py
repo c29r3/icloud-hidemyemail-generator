@@ -1,19 +1,23 @@
 import asyncio
 import datetime
+import aiofiles
 import os
+from typing import Union, List, Optional
 import re
 
-from rich.prompt import Prompt
+from rich.text import Text
+from rich.prompt import IntPrompt
 from rich.console import Console
-from rich.table import Table, box, Column
-from typing import Union, List
+from rich.table import Table
 
 from icloud import HideMyEmail
 
 
-MAX_CONCURRENT_TASKS = 5
-SLEEP_INTERVAL = 30*60
-COUNT_TO_GENERATE = 30
+MAX_CONCURRENT_TASKS = 2
+
+async def write_email_to_file(email: str, filename: str = 'emails.txt'):
+    async with aiofiles.open(filename, 'a') as f:
+        await f.write(email + '\n')
 
 
 class RichHideMyEmail(HideMyEmail):
@@ -22,14 +26,7 @@ class RichHideMyEmail(HideMyEmail):
     def __init__(self):
         super().__init__()
         self.console = Console()
-        self.table = Table(
-            Column("Label", style="bold white"),
-            Column("Email", style="bold cyan"),
-            Column("Creation Time", style="bold white"),
-            Column("Status", style="bold cyan"),
-            style="bold green", 
-            box=box.MINIMAL,
-        )
+        self.table = Table()
 
         if os.path.exists(self._cookie_file):
             # load in a cookie string from file
@@ -56,6 +53,7 @@ class RichHideMyEmail(HideMyEmail):
             self.console.log(
                 f"[bold red][ERR][/] - Failed to generate email. Reason: {err_msg}"
             )
+            await asyncio.sleep(600)
             return
 
         email = gen_res["result"]["hme"]
@@ -79,56 +77,59 @@ class RichHideMyEmail(HideMyEmail):
             return
 
         self.console.log(f'[100%] "{email}" - Successfully reserved')
+        write_email_to_file(email=email)
         return email
 
     async def _generate(self, num: int):
         tasks = []
         for _ in range(num):
             task = asyncio.ensure_future(self._generate_one())
+            await asyncio.sleep(3)
             tasks.append(task)
 
         return filter(lambda e: e is not None, await asyncio.gather(*tasks))
 
-    async def ask_action(self):
+    async def generate(self, count: Optional[int]) -> List[str]:
         try:
+            emails = []
             self.console.rule()
-            s = Prompt.ask(
-                "[bold cyan]1.[/bold cyan] Generate emails\n"
-                "[bold cyan]2.[/bold cyan] Get emails list\n"
-                "\n"
-                "[bold green]Select your action [cyan](Ctrl+C to exit)[reset]",
-                console=self.console
-            ).strip()
+            if count is None:
+                s = IntPrompt.ask(
+                    Text.assemble(("How many iCloud emails you want to generate?")),
+                    console=self.console,
+                )
 
-            if s == "1":
-                return await self.generate()
-            elif s == "2":
-                return await self.list(True)
-            else:
-                raise ValueError
-        except (KeyboardInterrupt, ValueError):
-            return
-
-    async def generate(self) -> List[str]:
-        try:
+                count = int(s)
+            self.console.log(f"Generating {count} email(s)...")
             self.console.rule()
-            with self.console.status(f"[bold green]Generating iCloud emails..."):
-                while True:
-                    count = int(COUNT_TO_GENERATE)
-                    emails = []
-                    while count > 0:
-                        batch = await self._generate(MAX_CONCURRENT_TASKS)
-                        emails += batch
-                        count -= MAX_CONCURRENT_TASKS
-                    self.console.log(f"[cyan]Generated {len(emails)} emails, sleeping {round(SLEEP_INTERVAL/60)} minute(s)")
-                    await asyncio.sleep(SLEEP_INTERVAL)
+
+            with self.console.status(f"[bold green]Generating iCloud email(s)..."):
+                while count > 0:
+                    batch = await self._generate(
+                        count if count < MAX_CONCURRENT_TASKS else MAX_CONCURRENT_TASKS
+                    )
+                    count -= MAX_CONCURRENT_TASKS
+                    emails += batch
+
+            if len(emails) > 0:
+                with open("emails.txt", "a+") as f:
+                    f.write(os.linesep.join(emails) + os.linesep)
+
+                self.console.rule()
+                self.console.log(
+                    f':star: Emails have been saved into the "emails.txt" file'
+                )
+
+                self.console.log(
+                    f"[bold green]All done![/] Successfully generated [bold green]{len(emails)}[/] email(s)"
+                )
+
+            return emails
         except KeyboardInterrupt:
             return []
 
-    async def list(self, active: bool, search: str = None) -> None:
-        self.console.rule()
-        with self.console.status(f"[bold green]Getting iCloud emails..."):
-            gen_res = await self.list_email()
+    async def list(self, active: bool, search: str) -> None:
+        gen_res = await self.list_email()
         if not gen_res:
             return
 
@@ -144,45 +145,52 @@ class RichHideMyEmail(HideMyEmail):
             )
             return
 
-        email_strings = []
-        for email in gen_res["result"]["hmeEmails"]:
-            status = "Active" if email["isActive"] else "Inactive"
-            creation_time = datetime.datetime.fromtimestamp(
-                email["createTimestamp"] / 1000
-            ).strftime("%y-%m-%d %H:%M")
-            email_strings.append(f"{email['label']};{email['hme']};{creation_time};{status}")
-            if email["isActive"] == active:
-                if search is None or re.search(search, email["label"]):
+        self.table.add_column("Label")
+        self.table.add_column("Hide my email")
+        self.table.add_column("Created Date Time")
+        self.table.add_column("IsActive")
+
+        for row in gen_res["result"]["hmeEmails"]:
+            if row["isActive"] == active:
+                if search is not None and re.search(search, row["label"]):
                     self.table.add_row(
-                        email["label"],
-                        email["hme"],
-                        creation_time,
-                        status,
+                        row["label"],
+                        row["hme"],
+                        str(
+                            datetime.datetime.fromtimestamp(
+                                row["createTimestamp"] / 1000
+                            )
+                        ),
+                        str(row["isActive"]),
                     )
+                else:
+                    self.table.add_row(
+                        row["label"],
+                        row["hme"],
+                        str(
+                            datetime.datetime.fromtimestamp(
+                                row["createTimestamp"] / 1000
+                            )
+                        ),
+                        str(row["isActive"]),
+                    )
+
         self.console.print(self.table)
-        with open("emails.txt", "w", encoding="utf-8") as f:
-            f.write(os.linesep.join(email_strings))
-        self.console.log('[bold green]Written to emails.txt in format [cyan]label;email;time;status')
 
 
-async def generate() -> None:
+async def generate(count: Optional[int]) -> None:
     async with RichHideMyEmail() as hme:
-        await hme.generate()
+        await hme.generate(count)
 
 
-async def list(active: bool, search: str = None) -> None:
+async def list(active: bool, search: str) -> None:
     async with RichHideMyEmail() as hme:
         await hme.list(active, search)
 
 
-async def ask_action() -> None:
-    async with RichHideMyEmail() as hme:
-        await hme.ask_action()
-
-
 if __name__ == "__main__":
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(ask_action())
+        loop.run_until_complete(generate(None))
     except KeyboardInterrupt:
         pass
