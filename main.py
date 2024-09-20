@@ -74,10 +74,11 @@ class RichHideMyEmail(HideMyEmail):
             self.console.log(
                 f'[bold red][ERR][/] "{email}" - Failed to reserve email. Reason: {err_msg}'
             )
+            await asyncio.sleep(30)
             return
 
         self.console.log(f'[100%] "{email}" - Successfully reserved')
-        write_email_to_file(email=email)
+        await write_email_to_file(email=email)
         return email
 
     async def _generate(self, num: int):
@@ -112,7 +113,7 @@ class RichHideMyEmail(HideMyEmail):
                     emails += batch
 
             if len(emails) > 0:
-                with open("emails.txt", "a+") as f:
+                with open("emails_total.txt", "a+") as f:
                     f.write(os.linesep.join(emails) + os.linesep)
 
                 self.console.rule()
