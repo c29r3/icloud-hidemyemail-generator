@@ -43,7 +43,7 @@ class RichHideMyEmail(HideMyEmail):
 
         if not gen_res:
             return
-        elif "You have reached the limit" in str(gen_res) or not gen_res["success"]:
+        elif "You have reached the limit" in str(gen_res):
             error = gen_res["error"] if "error" in gen_res else {}
             err_msg = "Unknown"
             if type(error) == int and "reason" in gen_res:
