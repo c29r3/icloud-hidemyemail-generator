@@ -43,7 +43,7 @@ class RichHideMyEmail(HideMyEmail):
 
         if not gen_res:
             return
-        elif "success" not in gen_res or not gen_res["success"]:
+        elif "You have reached the limit" in str(gen_res) or not gen_res["success"]:
             error = gen_res["error"] if "error" in gen_res else {}
             err_msg = "Unknown"
             if type(error) == int and "reason" in gen_res:
@@ -53,7 +53,7 @@ class RichHideMyEmail(HideMyEmail):
             self.console.log(
                 f"[bold red][ERR][/] - Failed to generate email. Reason: {err_msg}"
             )
-            await asyncio.sleep(600)
+            await asyncio.sleep(1810)
             return
 
         email = gen_res["result"]["hme"]
